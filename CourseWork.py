@@ -6,6 +6,7 @@ import sys
 import socket
 import struct
 import random
+from textwrap import wrap
 
 '''
 This is a template that can be used in order to get started. 
@@ -70,8 +71,6 @@ def send_and_receive_udp(address, port, cid):
     Implement UDP part here.
     '''
     print("This is the UDP part. Implement it yourself.")
-    global current_server_key
-
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     message_body = "Hello from " + cid + "\r\n"
@@ -79,41 +78,72 @@ def send_and_receive_udp(address, port, cid):
     data = struct.pack(DATAGRAM_FORMAT, cid.encode(), True, True, 0, len(encrypted_message_body), encrypted_message_body.encode())
     s.sendto(data, (address, port))
 
+    message_body_parts = []
     while True:
         received_data = s.recv(1024)
         cid, ack, eom, data_remaining, content_length, content = struct.unpack(DATAGRAM_FORMAT, received_data)
 
-        message_body = content.decode()[:content_length]
+        message_body_parts.append(content.decode()[:content_length])
 
         if eom:
-            print("EOM " + message_body)
+            print("EOM " + message_body_parts[0])
             break
 
-        message_without_parity = check_message_parity(message_body)
+        if data_remaining == 0:
+            reply_parts = process_message(message_body, cid)
 
-        if message_without_parity == "WRONG_PARITY":
-            reply_body = "Send again"
-            print("Parity fail")
-            current_server_key += 1
-            ack_bit = False
-        else:
-            decrypted_message_body = decrypt_message(message_without_parity)
-            print(decrypted_message_body)
-            reply_body = ' '.join(decrypted_message_body.replace('\r\n', '').split(' ')[::-1])
-            ack_bit = True
+            for reply in reply_parts:
+                s.sendto(reply, (address, port))
 
-        print(reply_body)
-
-        reply_body_length = len(reply_body)
-        encrypted_reply_body = encrypt_message(reply_body)
-        parity_reply_body = add_parity_to_message(encrypted_reply_body)
-
-        reply = struct.pack(DATAGRAM_FORMAT, cid, ack_bit, True, 0, reply_body_length, parity_reply_body.encode())
-        s.sendto(reply, (address, port))
 
     s.close()
 
     return
+
+def process_message(message_body_parts, cid):
+    global current_server_key
+    decrypted_message_body = ''
+    parity = True
+
+    for message_part in message_body_parts:
+        message_part_without_parity = check_message_parity(message_part)
+
+        if message_part_without_parity == "WRONG_PARITY":
+            print("Parity fail")
+            current_server_key += 1
+            parity = False
+        else:
+            decrypted_message_part = decrypt_message(message_part_without_parity)
+            print(decrypted_message_part)
+            decrypted_message_body += decrypted_message_part
+
+    if parity:
+        reply_body = ' '.join(decrypted_message_body.replace('\r\n', '').split(' ')[::-1])
+    else:
+        reply_body = "Send again"
+
+    print(reply_body)
+
+    reply_pieces_length = []
+    reply_message_parts = []
+
+    for piece in pieces(reply_body):
+        reply_pieces_length.append(len(piece))
+        encrypted_reply_part = encrypt_message(piece)
+        parity_reply_part = add_parity_to_message(encrypted_reply_part)
+        reply_message_parts.append(parity_reply_part)
+
+    remaining = sum(reply_pieces_length)
+
+    reply_parts = []
+    for i, part in enumerate(reply_message_parts):
+        remaining -= reply_pieces_length[i]
+        reply_parts.append(struct.pack(DATAGRAM_FORMAT, cid, parity, True, remaining, reply_pieces_length[i], part.encode()))
+
+    return reply_parts
+
+def pieces(message, length = 64):
+    return wrap(message, length)
 
 def encrypt_message(message):
     global current_client_key
