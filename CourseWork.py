@@ -5,6 +5,7 @@
 import sys
 import socket
 import struct
+import random
 
 '''
 This is a template that can be used in order to get started. 
@@ -19,9 +20,25 @@ a functioning TCP part of the course work with little hassle.
 '''
 
 DATAGRAM_FORMAT = '!8s??HH128s'
+
+current_client_key = 0
+current_server_key = 0
+client_keys = []
+server_keys = []
  
 def send_and_receive_tcp(address, port, message):
     print("You gave arguments: {} {} {}".format(address, port, message))
+    global client_keys, server_keys
+
+    message += "\n"
+    for _ in range(20):
+        key = generate_key()
+        client_keys.append(key)
+        message += key + "\r\n"
+
+    message += ".\r\n"
+
+    print(message)
     # create TCP socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # connect socket to given address and port
@@ -39,7 +56,10 @@ def send_and_receive_tcp(address, port, message):
     # close the socket
     s.close()
     # Get your CID and UDP port from the message
-    hello, cid, udp_port = decoded_message.replace('\r\n', '').split(' ')
+    message_parts = decoded_message.split('\r\n')
+    server_keys = message_parts[1:-1]
+
+    hello, cid, udp_port = message_parts[0].split(' ')
     # Continue to UDP messaging. You might want to give the function some other parameters like the above mentioned cid and port.
     send_and_receive_udp(address, int(udp_port), cid)
     return
@@ -50,10 +70,13 @@ def send_and_receive_udp(address, port, cid):
     Implement UDP part here.
     '''
     print("This is the UDP part. Implement it yourself.")
+    global current_server_key
+
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     message_body = "Hello from " + cid + "\r\n"
-    data = struct.pack(DATAGRAM_FORMAT, cid.encode(), True, True, 0, len(message_body), message_body.encode())
+    encrypted_message_body = encrypt_message(message_body)
+    data = struct.pack(DATAGRAM_FORMAT, cid.encode(), True, True, 0, len(encrypted_message_body), encrypted_message_body.encode())
     s.sendto(data, (address, port))
 
     while True:
@@ -61,27 +84,29 @@ def send_and_receive_udp(address, port, cid):
         cid, ack, eom, data_remaining, content_length, content = struct.unpack(DATAGRAM_FORMAT, received_data)
 
         message_body = content.decode()[:content_length]
-        print(message_body)
 
         if eom:
-            print("EOM")
+            print("EOM " + message_body)
             break
 
         message_without_parity = check_message_parity(message_body)
-        print(message_without_parity)
 
         if message_without_parity == "WRONG_PARITY":
             reply_body = "Send again"
+            print("Parity fail")
+            current_server_key += 1
             ack_bit = False
         else:
-            reply_body = ' '.join(message_without_parity.replace('\r\n', '').split(' ')[::-1])
+            decrypted_message_body = decrypt_message(message_without_parity)
+            print(decrypted_message_body)
+            reply_body = ' '.join(decrypted_message_body.replace('\r\n', '').split(' ')[::-1])
             ack_bit = True
 
         print(reply_body)
 
         reply_body_length = len(reply_body)
-        parity_reply_body = add_parity_to_message(reply_body)
-        print(parity_reply_body)
+        encrypted_reply_body = encrypt_message(reply_body)
+        parity_reply_body = add_parity_to_message(encrypted_reply_body)
 
         reply = struct.pack(DATAGRAM_FORMAT, cid, ack_bit, True, 0, reply_body_length, parity_reply_body.encode())
         s.sendto(reply, (address, port))
@@ -89,6 +114,39 @@ def send_and_receive_udp(address, port, cid):
     s.close()
 
     return
+
+def encrypt_message(message):
+    global current_client_key
+
+    if current_client_key >= len(client_keys):
+        return message
+
+    key = client_keys[current_client_key]
+    current_client_key += 1
+
+    encrypted_message = ''
+    for i, char in enumerate(message):
+        encrypted_message += chr((ord(char) ^ ord(key[i])))
+
+    return encrypted_message
+
+def decrypt_message(message):
+    global current_server_key
+
+    if current_server_key >= len(server_keys):
+        return message
+
+    key = server_keys[current_server_key]
+    current_server_key += 1
+
+    decrypted_message = ''
+    for i, char in enumerate(message):
+        decrypted_message += chr((ord(char) ^ ord(key[i])))
+
+    return decrypted_message
+
+def generate_key():
+    return ''.join(random.choices("0123456789ABCDEF", k=64))
 
 def check_message_parity(parity_message):
     message = ''
