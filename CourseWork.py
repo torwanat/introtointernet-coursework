@@ -67,16 +67,58 @@ def send_and_receive_udp(address, port, cid):
             print("EOM")
             break
 
-        reply_body = ' '.join(message_body.replace('\r\n', '').split(' ')[::-1])
+        message_without_parity = check_message_parity(message_body)
+        print(message_without_parity)
+
+        if message_without_parity == "WRONG_PARITY":
+            reply_body = "Send again"
+            ack_bit = False
+        else:
+            reply_body = ' '.join(message_without_parity.replace('\r\n', '').split(' ')[::-1])
+            ack_bit = True
+
         print(reply_body)
 
-        reply = struct.pack(DATAGRAM_FORMAT, cid, True, True, 0, len(reply_body), reply_body.encode())
+        reply_body_length = len(reply_body)
+        parity_reply_body = add_parity_to_message(reply_body)
+        print(parity_reply_body)
+
+        reply = struct.pack(DATAGRAM_FORMAT, cid, ack_bit, True, 0, reply_body_length, parity_reply_body.encode())
         s.sendto(reply, (address, port))
 
     s.close()
 
     return
- 
+
+def check_message_parity(parity_message):
+    message = ''
+    for char in parity_message:
+        # print(char)
+        char_value = ord(char)
+        parity_bit = (char_value & 1)
+        char_value >>= 1
+        # print("Parity " + str(parity_bit) + " char " + chr(char_value))
+        if parity_bit == get_parity(char_value):
+            message += chr(char_value)
+        else:
+            message = "WRONG_PARITY"
+            break
+
+    return message
+
+def add_parity_to_message(message):
+    parity_message = ''
+    for char in message:
+        char_value = ord(char)
+        char_value <<= 1
+        char_value += get_parity(char_value)
+        parity_message += chr(char_value)
+    return parity_message
+
+def get_parity(n):
+     while n > 1:
+            n = (n >> 1) ^ (n & 1)
+     return n
  
 def main():
     USAGE = 'usage: %s <server address> <server port> <message>' % sys.argv[0]
