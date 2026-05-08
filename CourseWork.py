@@ -6,7 +6,6 @@ import sys
 import socket
 import struct
 import random
-from textwrap import wrap
 
 '''
 This is a template that can be used in order to get started. 
@@ -24,6 +23,7 @@ DATAGRAM_FORMAT = '!8s??HH128s'
 
 client_keys = []
 server_keys = []
+encrypt = False
  
 def send_and_receive_tcp(address, port, message):
     print("You gave arguments: {} {} {}".format(address, port, message))
@@ -37,32 +37,23 @@ def send_and_receive_tcp(address, port, message):
 
     message += ".\r\n"
 
-    print("Amount of keys:", len(client_keys), "key length:", len(client_keys[0]))
+    print("Amount of keys:", len(client_keys), "Key length:", len(client_keys[0]))
     print(message)
-    # create TCP socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # connect socket to given address and port
     s.connect((address, port))
-    # python3 sendall() requires bytes like object. encode the message with str.encode() command
     encoded_message = message.encode('utf-8')
-    # send given message to socket
     s.send(encoded_message)
-    # receive data from socket
     received_message = s.recv(1024)
-    # data you received is in bytes format. turn it to string with .decode() command
     decoded_message = received_message.decode('utf-8')
-    # print received data
     print(decoded_message)
-    # close the socket
     s.close()
-    # Get your CID and UDP port from the message
+
     try:
         message_parts = decoded_message.split('\r\n')
         server_keys = message_parts[1:-1]
-        print(server_keys)
 
         hello, cid, udp_port = message_parts[0].split(' ')
-        # Continue to UDP messaging. You might want to give the function some other parameters like the above mentioned cid and port.
+
         send_and_receive_udp(address, int(udp_port), cid)
     except Exception as e:
         print(e)
@@ -81,11 +72,13 @@ def send_and_receive_udp(address, port, cid):
 
     message_body = "Hello from " + cid + "\r\n"
 
-    encrypted_message_body = encryption(message_body, current_client_key, client_keys)
-    current_client_key += 1
-    data = struct.pack(DATAGRAM_FORMAT, cid.encode(), True, True, 0, len(encrypted_message_body), encrypted_message_body.encode())
+    if encrypt:
+        encrypted_message_body = encryption(message_body, current_client_key, client_keys)
+        current_client_key += 1
+        data = struct.pack(DATAGRAM_FORMAT, cid.encode(), True, True, 0, len(encrypted_message_body), encrypted_message_body.encode())
+    else:
+        data = struct.pack(DATAGRAM_FORMAT, cid.encode(), True, True, 0, len(message_body), message_body.encode())
 
-    # data = struct.pack(DATAGRAM_FORMAT, cid.encode(), True, True, 0, len(message_body), message_body.encode())
     s.sendto(data, (address, port))
 
     message_body_parts = []
@@ -126,10 +119,11 @@ def process_message(message_body_parts, cid, current_server_key, current_client_
             parity = False
             break
         else:
-            decrypted_message_part = encryption(message_part, current_server_key, server_keys)
-            decrypted_message_body += decrypted_message_part
-
-            # decrypted_message_body += message_part_without_parity
+            if encrypt:
+                decrypted_message_part = encryption(message_part, current_server_key, server_keys)
+                decrypted_message_body += decrypted_message_part
+            else:
+                decrypted_message_body += message_part_without_parity
 
     print("Message: ", decrypted_message_body)
     if parity:
@@ -145,9 +139,11 @@ def process_message(message_body_parts, cid, current_server_key, current_client_
     for piece in pieces(reply_body):
         reply_pieces_length.append(len(piece))
 
-        encrypted_reply_part = encryption(piece, current_client_key, client_keys)
-        parity_reply_part = add_parity_to_message(encrypted_reply_part)
-        # parity_reply_part = add_parity_to_message(piece)
+        if encrypt:
+            encrypted_reply_part = encryption(piece, current_client_key, client_keys)
+            parity_reply_part = add_parity_to_message(encrypted_reply_part)
+        else:
+            parity_reply_part = add_parity_to_message(piece)
 
         reply_message_parts.append(parity_reply_part)
 
@@ -165,7 +161,7 @@ def pieces(message, length = 64):
     return chunks
 
 def encryption(message, current_key, keyset):
-    print("Message ", message, " with key ", current_key, "from keyset", keyset)
+    print("Processing message", message, " with key ", current_key, "from keyset", keyset)
 
     if current_key >= len(keyset):
         return message
@@ -211,7 +207,8 @@ def get_parity(n):
  
 def main():
     USAGE = 'usage: %s <server address> <server port> <message>' % sys.argv[0]
- 
+    global encrypt
+
     try:
         # Get the server address, port and message from command line arguments
         server_address = str(sys.argv[1])
@@ -223,7 +220,10 @@ def main():
         print("Value Error")
     # Print usage instructions and exit if we didn't get proper arguments
         sys.exit(USAGE)
- 
+
+    if "ENC" in message:
+        encrypt = True
+
     send_and_receive_tcp(server_address, server_tcpport, message)
  
  
