@@ -24,6 +24,8 @@ DATAGRAM_FORMAT = '!8s??HH128s'
 client_keys = []
 server_keys = []
 encrypt = False
+current_client_key = 0
+current_server_key = 0
  
 def send_and_receive_tcp(address, port, message):
     print("You gave arguments: {} {} {}".format(address, port, message))
@@ -43,14 +45,15 @@ def send_and_receive_tcp(address, port, message):
     s.connect((address, port))
     encoded_message = message.encode('utf-8')
     s.send(encoded_message)
-    received_message = s.recv(1024)
+    received_message = s.recv(4096)
     decoded_message = received_message.decode('utf-8')
     print(decoded_message)
     s.close()
 
     try:
         message_parts = decoded_message.split('\r\n')
-        server_keys = message_parts[1:-1]
+        server_keys = message_parts[1:-2]
+        print(message_parts)
 
         hello, cid, udp_port = message_parts[0].split(' ')
 
@@ -67,14 +70,11 @@ def send_and_receive_udp(address, port, cid):
     '''
     print("This is the UDP part. Implement it yourself.")
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    current_client_key = 0
-    current_server_key = 0
 
     message_body = "Hello from " + cid + "\r\n"
 
     if encrypt:
-        encrypted_message_body = encryption(message_body, current_client_key, client_keys)
-        current_client_key += 1
+        encrypted_message_body = encryption(message_body, False)
         data = struct.pack(DATAGRAM_FORMAT, cid.encode(), True, True, 0, len(encrypted_message_body), encrypted_message_body.encode())
     else:
         data = struct.pack(DATAGRAM_FORMAT, cid.encode(), True, True, 0, len(message_body), message_body.encode())
@@ -93,9 +93,7 @@ def send_and_receive_udp(address, port, cid):
             break
 
         if data_remaining == 0:
-            reply_parts = process_message(message_body_parts, cid, current_server_key, current_client_key)
-            current_client_key += 1
-            current_server_key += 1
+            reply_parts = process_message(message_body_parts, cid)
 
             for reply in reply_parts:
                 s.sendto(reply, (address, port))
@@ -107,20 +105,24 @@ def send_and_receive_udp(address, port, cid):
 
     return
 
-def process_message(message_body_parts, cid, current_server_key, current_client_key):
+def process_message(message_body_parts, cid):
+    global current_server_key
     decrypted_message_body = ''
     parity = True
+    print(message_body_parts)
 
     for message_part in message_body_parts:
         message_part_without_parity = check_message_parity(message_part)
 
         if message_part_without_parity == "WRONG_PARITY":
             print("Parity fail")
+            current_server_key += 1
             parity = False
-            break
+            # break
         else:
             if encrypt:
-                decrypted_message_part = encryption(message_part, current_server_key, server_keys)
+                decrypted_message_part = encryption(message_part_without_parity, True)
+                print(decrypted_message_part)
                 decrypted_message_body += decrypted_message_part
             else:
                 decrypted_message_body += message_part_without_parity
@@ -140,7 +142,7 @@ def process_message(message_body_parts, cid, current_server_key, current_client_
         reply_pieces_length.append(len(piece))
 
         if encrypt:
-            encrypted_reply_part = encryption(piece, current_client_key, client_keys)
+            encrypted_reply_part = encryption(piece, False)
             parity_reply_part = add_parity_to_message(encrypted_reply_part)
         else:
             parity_reply_part = add_parity_to_message(piece)
@@ -160,17 +162,32 @@ def pieces(message, length = 64):
     chunks = [message[i:i + length] for i in range(0, len(message), length)]
     return chunks
 
-def encryption(message, current_key, keyset):
-    print("Processing message", message, " with key ", current_key, "from keyset", keyset)
+def encryption(message, server):
+    # print("Processing message", message, " with key ", current_key, "from keyset", keyset)
+    global current_server_key, current_client_key
+    if server:
+        keyset = server_keys
+        current_key = current_server_key
+    else:
+        keyset = client_keys
+        current_key = current_client_key
 
     if current_key >= len(keyset):
         return message
     key = keyset[current_key]
 
+    print("Using key", current_key, "from server", server)
+
+
     result = ''
 
     for i, char in enumerate(message):
         result += chr((ord(char) ^ ord(key[i])))
+
+    if server:
+        current_server_key += 1
+    else:
+        current_client_key += 1
 
     return result
 
